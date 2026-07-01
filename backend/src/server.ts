@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { verificarToken, concederAcesso, CustomRequest } from './middlewares/auth';
 import { tratadorDeErrosGlobal } from './middlewares/erro';
+import cors from 'cors';
 
 // Carrega as variáveis de ambiente
 dotenv.config();
@@ -13,6 +14,8 @@ dotenv.config();
 const app = express();
 const prisma = new PrismaClient();
 
+// Configura o CORS e o Parser de JSON na ordem correta
+app.use(cors());
 app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'chave_reserva_segura';
@@ -72,7 +75,6 @@ app.post('/auth/registrar', capturarErro(async (req: CustomRequest, res: Respons
 }));
 
 app.post('/auth/login', capturarErro(async (req: CustomRequest, res: Response) => {
-  // Valida a entrada do corpo usando o Zod de forma estrita
   const dadosValidados = loginSchema.parse(req.body);
 
   const usuario = await prisma.usuarios.findUnique({ where: { email: dadosValidados.email } });
@@ -109,9 +111,7 @@ app.get('/produtos', verificarToken, capturarErro(async (req: CustomRequest, res
 }));
 
 app.post('/produtos', verificarToken, concederAcesso(['DONO']), capturarErro(async (req: CustomRequest, res: Response) => {
-  const bar_id = req.usuarioLogado?.bar_id; 
-  
-  // O Zod valida os tipos. Se quantidade_estoque for uma string ou negativa, ele joga o erro pro middleware
+  const bar_id = req.usuarioLogado?.bar_id;
   const dadosValidados = produtoSchema.parse(req.body);
 
   const novoProduto = await prisma.produtos.create({
@@ -250,7 +250,7 @@ app.post('/mesas/pedido', verificarToken, capturarErro(async (req: CustomRequest
     })
   ]);
 
-  return res.status(201).json({ message: 'Item lançado com sucesso!', pedido: novoPedido });
+  return res.status(201).json({ message: 'Item launched with success!', pedido: novoPedido });
 }));
 
 app.post('/mesas/fechamento', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
@@ -263,7 +263,7 @@ app.post('/mesas/fechamento', verificarToken, capturarErro(async (req: CustomReq
 
   const pedidos = await prisma.pedidos_mesa.findMany({
     where: { bar_id, mesa_id: Number(mesa_id) },
-    include: { produtos: true }
+    include: { Survey_produtos: { select: { preco_venda: true } } } as any
   });
 
   if (pedidos.length === 0) {
@@ -271,7 +271,8 @@ app.post('/mesas/fechamento', verificarToken, capturarErro(async (req: CustomReq
   }
 
   const valorTotal = pedidos.reduce((acc: number, pedido: any) => {
-    return acc + (Number(pedido.produtos.preco_venda) * pedido.quantidade);
+    const produto = pedido.produtos || pedido.Survey_produtos;
+    return acc + (Number(produto.preco_venda) * pedido.quantidade);
   }, 0);
 
   if (forma_pagamento === 'FIADO') {
@@ -323,8 +324,16 @@ app.get('/relatorios/dashboard', verificarToken, concederAcesso(['DONO']), captu
 
   const totalPenduradoNoFiado = movimentacoesFiado.filter((m: any) => m.tipo === 'DEBITO').reduce((acc: number, m: any) => acc + Number(m.valor), 0);
   const totalPagoNoFiado = movimentacoesFiado.filter((m: any) => m.tipo === 'CREDITO').reduce((acc: number, m: any) => acc + Number(m.valor), 0);
-  const itensEmMesas = await prisma.pedidos_mesa.findMany({ where: { bar_id }, include: { produtos: true } });
-  const totalEmMesasAbertas = itensEmMesas.reduce((acc: number, pedido: any) => acc + (Number(pedido.produtos.preco_venda) * pedido.quantidade), 0);
+  
+  const itensEmMesas = await prisma.pedidos_mesa.findMany({ 
+    where: { bar_id }, 
+    include: { Survey_produtos: { select: { preco_venda: true } } } as any 
+  });
+  
+  const totalEmMesasAbertas = itensEmMesas.reduce((acc: number, pedido: any) => {
+    const produto = pedido.produtos || pedido.Survey_produtos;
+    return acc + (Number(produto.preco_venda) * pedido.quantidade);
+  }, 0);
 
   return res.json({
     resumo_financeiro: {
@@ -337,7 +346,7 @@ app.get('/relatorios/dashboard', verificarToken, concederAcesso(['DONO']), captu
 }));
 
 // ==========================================
-// 🚨 O SINALIZADOR DE ENTRADA DO INTERCEPTADOR DE ERROS
+// 🚨 INTERCEPTADOR DE ERROS
 // ==========================================
 app.use(tratadorDeErrosGlobal);
 
