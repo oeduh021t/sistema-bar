@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model bares {
+  id              Int               @id @default(autoincrement())
+  nome            String            @db.VarChar(100)
+  cnpj            String?           @unique @db.VarChar(18)
+  criado_em       DateTime?         @default(now()) @db.Timestamp(6)
+  clientes_fiado  clientes_fiado[]
+  historico_fiado historico_fiado[]
+  mesas           mesas[]
+  pedidos_mesa    pedidos_mesa[]
+  produtos        produtos[]
+  usuarios        usuarios[]
+}
+
+model clientes_fiado {
+  id              Int               @id @default(autoincrement())
+  bar_id          Int?
+  nome            String            @db.VarChar(100)
+  telefone        String?           @db.VarChar(20)
+  limite_credito  Decimal           @default(200.00) @db.Decimal(10, 2)
+  saldo_devedor   Decimal           @default(0.00) @db.Decimal(10, 2)
+  bares           bares?            @relation(fields: [bar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  historico_fiado historico_fiado[]
+}
+
+model produtos {
+  id                 Int            @id @default(autoincrement())
+  bar_id             Int?
+  nome               String         @db.VarChar(100)
+  preco_venda        Decimal        @db.Decimal(10, 2)
+  quantidade_estoque Int            @default(0)
+  codigo_barras      String?        @db.VarChar(50)
+  pedidos_mesa       pedidos_mesa[]
+  bares              bares?         @relation(fields: [bar_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_bar_produto")
+}
+
+model historico_fiado {
+  id             Int             @id @default(autoincrement())
+  bar_id         Int?
+  cliente_id     Int?
+  tipo           String          @db.VarChar(10)
+  valor          Decimal         @db.Decimal(10, 2)
+  descricao      String?         @db.VarChar(255)
+  criado_em      DateTime?       @default(now()) @db.Timestamp(6)
+  bares          bares?          @relation(fields: [bar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  clientes_fiado clientes_fiado? @relation(fields: [cliente_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model mesas {
+  id           Int            @id @default(autoincrement())
+  bar_id       Int?
+  numero       Int
+  status       String         @default("LIVRE") @db.VarChar(20)
+  bares        bares?         @relation(fields: [bar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  pedidos_mesa pedidos_mesa[]
+
+  @@unique([bar_id, numero], map: "unique_mesa_por_bar")
+}
+
+model pedidos_mesa {
+  id         Int       @id @default(autoincrement())
+  bar_id     Int?
+  mesa_id    Int?
+  produto_id Int?
+  quantidade Int       @default(1)
+  criado_em  DateTime? @default(now()) @db.Timestamp(6)
+  bares      bares?    @relation(fields: [bar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  mesas      mesas?    @relation(fields: [mesa_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  produtos   produtos? @relation(fields: [produto_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+}
+
+model usuarios {
+  id        Int       @id @default(autoincrement())
+  bar_id    Int?
+  nome      String    @db.VarChar(100)
+  email     String    @unique @db.VarChar(100)
+  senha     String    @db.VarChar(255)
+  funcao    String    @default("GARCOM") @db.VarChar(20)
+  criado_em DateTime? @default(now()) @db.Timestamp(6)
+  bares     bares?    @relation(fields: [bar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
