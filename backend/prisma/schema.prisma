@@ -9,15 +9,20 @@ datasource db {
 
 model bares {
   id              Int               @id @default(autoincrement())
-  nome            String            @db.VarChar(100)
-  cnpj            String?           @unique @db.VarChar(18)
+  nome            String            @db.VarChar(100) // Nome ou Razão Social
+  cnpj            String?           @db.VarChar(18)  // Sem o @unique para testar livremente
+  status          String            @default("ATIVO") @db.VarChar(20) // "ATIVO" ou "BLOQUEADO"
+  data_vencimento DateTime?         @db.Timestamp(6) // 🟢 Controla o vencimento da assinatura SaaS
   criado_em       DateTime?         @default(now()) @db.Timestamp(6)
+  
+  // Relações existentes mantidas intocadas
   clientes_fiado  clientes_fiado[]
   historico_fiado historico_fiado[]
   mesas           mesas[]
   pedidos_mesa    pedidos_mesa[]
   produtos        produtos[]
   usuarios        usuarios[]
+  mensalidades    mensalidades[]    // 🟢 Histórico financeiro de mensalidades do bar
 }
 
 model clientes_fiado {
@@ -43,14 +48,14 @@ model produtos {
 }
 
 model historico_fiado {
-  id             Int             @id @default(autoincrement())
-  bar_id         Int?
-  cliente_id     Int?
-  tipo           String          @db.VarChar(10)
-  valor          Decimal         @db.Decimal(10, 2)
-  descricao      String?         @db.VarChar(255)
-  criado_em      DateTime?       @default(now()) @db.Timestamp(6)
-  bares          bares?          @relation(fields: [bar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id              Int            @id @default(autoincrement())
+  bar_id          Int?
+  cliente_id      Int?
+  tipo            String         @db.VarChar(10)
+  valor           Decimal        @db.Decimal(10, 2)
+  descricao       String?        @db.VarChar(255)
+  criado_em       DateTime?      @default(now()) @db.Timestamp(6)
+  bares           bares?         @relation(fields: [bar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   clientes_fiado clientes_fiado? @relation(fields: [cliente_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
@@ -84,28 +89,24 @@ model usuarios {
   email     String    @unique @db.VarChar(100)
   senha     String    @db.VarChar(255)
   funcao    String    @default("GARCOM") @db.VarChar(20)
+  status    String    @default("ATIVO") @db.VarChar(20) // 🟢 ATIVO ou INATIVO (evita deleção física)
   criado_em DateTime? @default(now()) @db.Timestamp(6)
   bares     bares?    @relation(fields: [bar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
 model Caixas {
-  id                    Int       @id @default(autoincrement())
-  bar_id                Int
-  usuario_id            Int
-  valor_abertura        Decimal   @db.Decimal(10, 2)
-  
-  // Valores calculados pelo sistema (esperados)
+  id                     Int       @id @default(autoincrement())
+  bar_id                 Int
+  usuario_id             Int
+  valor_abertura         Decimal   @db.Decimal(10, 2)
   total_dinheiro_sistema Decimal   @default(0.00) @db.Decimal(10, 2)
   total_pix_sistema      Decimal   @default(0.00) @db.Decimal(10, 2)
   total_cartao_sistema   Decimal   @default(0.00) @db.Decimal(10, 2)
-  
-  // Valores informados na conferência de fechamento
-  valor_fechamento_real  Decimal?  @db.Decimal(10, 2) // O que tinha de fato na gaveta
-  diferenca_caixa        Decimal?  @db.Decimal(10, 2) // Sobra ou falta (Real - Sistema)
-  
-  status                String    @default("ABERTO") // "ABERTO" ou "FECHADO"
-  data_abertura         DateTime  @default(now())
-  data_fechamento       DateTime?
+  valor_fechamento_real  Decimal?  @db.Decimal(10, 2)
+  diferenca_caixa        Decimal?  @db.Decimal(10, 2)
+  status                 String    @default("ABERTO")
+  data_abertura          DateTime  @default(now())
+  data_fechamento        DateTime?
 
   @@index([bar_id])
 }
@@ -114,11 +115,30 @@ model Movimentacoes_caixa {
   id         Int      @id @default(autoincrement())
   bar_id     Int
   caixa_id   Int
-  tipo       String   // "ENTRADA" (Venda), "SUPRIMENTO" (Injetar troco), "SANGRIA" (Retirar dinheiro)
-  meio_pagto String   // "DINHEIRO", "PIX", "CARTAO"
+  tipo       String   
+  meio_pagto String   
   valor      Decimal  @db.Decimal(10, 2)
   descricao  String?
   data       DateTime @default(now())
 
   @@index([caixa_id])
+}
+
+model Saas_admins {
+  id          Int      @id @default(autoincrement())
+  nome        String
+  email       String   @unique
+  senha       String
+  data_criacao DateTime @default(now())
+}
+
+// 🟢 Nova tabela para controle financeiro e histórico de assinaturas do SaaS
+model mensalidades {
+  id                 Int      @id @default(autoincrement())
+  bar_id             Int
+  valor_pago         Decimal  @db.Decimal(10, 2)
+  data_pagamento     DateTime @default(now()) @db.Timestamp(6)
+  proximo_vencimento DateTime @db.Timestamp(6)
+  status             String   @default("PAGO") @db.VarChar(20)
+  bares              bares    @relation(fields: [bar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
