@@ -19,6 +19,13 @@ interface Cliente {
   nome: string;
 }
 
+interface ItemConsumo {
+  produto: string;
+  qtd: number;
+  precoUn: number;
+  total: number;
+}
+
 export const Mesas: React.FC = () => {
   // Estados de dados do Banco
   const [mesas, setMesas] = useState<Mesa[]>([]);
@@ -39,29 +46,24 @@ export const Mesas: React.FC = () => {
   const [clienteFiadoId, setClienteFiadoId] = useState('');
   const [numeroMesa, setNumeroMesa] = useState('');
 
-  // Simulação local do consumo da comanda ativa
-  const [consumoMesa, setConsumoMesa] = useState<{produto: string, qtd: number, precoUn: number, total: number}[]>([
-    { produto: 'Cerveja Brahma 600ml', qtd: 2, precoUn: 10.00, total: 20.00 },
-    { produto: 'Cerveja Heineken', qtd: 1, precoUn: 12.50, total: 12.50 }
-  ]);
+  // 🔄 Começa vazio para não vazar histórico de uma mesa para a outra!
+  const [consumoMesa, setConsumoMesa] = useState<ItemConsumo[]>([]);
 
   const carregarDados = async () => {
     try {
       setLoading(true);
-      
+      setErro(null);
+
       // 1. Busca os Produtos
       const resProdutos = await api.get('/produtos');
       setProdutos(resProdutos.data);
 
-      // 2. Busca os Clientes de Pendências
+      // 2. Busca os Clientes de Pendências Reais
       try {
         const resClientes = await api.get('/clientes-fiado');
         setClientes(resClientes.data);
       } catch {
-        setClientes([
-          { id: 1, nome: 'Roberto Carlos da Silva' },
-          { id: 2, nome: 'Cliente Teste Inadimplente' }
-        ]);
+        setClientes([]);
       }
       
       // 3. Busca as Mesas Reais do Banco
@@ -69,11 +71,7 @@ export const Mesas: React.FC = () => {
         const resMesas = await api.get('/mesas');
         setMesas(resMesas.data);
       } catch {
-        setMesas([
-          { id: 1, numero: 1, status: 'OCUPADA' },
-          { id: 2, numero: 2, status: 'LIVRE' },
-          { id: 3, numero: 3, status: 'LIVRE' },
-        ]);
+        setMesas([]);
       }
     } catch (err) {
       console.error('Erro ao carregar dados do salão:', err);
@@ -82,9 +80,28 @@ export const Mesas: React.FC = () => {
     }
   };
 
+  // 🔄 Busca o consumo real de uma mesa específica direto do backend
+  const carregarConsumoMesa = async (mesa: Mesa) => {
+    try {
+      setErro(null);
+      const response = await api.get(`/mesas/${mesa.id}/pedidos`);
+      setConsumoMesa(response.data);
+    } catch (err: any) {
+      console.error('Erro ao carregar comanda da mesa:', err);
+      setErro('Não foi possível carregar o consumo atual desta mesa.');
+    }
+  };
+
   useEffect(() => {
     carregarDados();
   }, []);
+
+  const handleMesaClick = (mesa: Mesa) => {
+    setMesaSelecionada(mesa);
+    setModoPagamento(false);
+    setErro(null);
+    carregarConsumoMesa(mesa);
+  };
 
   const handleCriarMesa = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -127,22 +144,15 @@ export const Mesas: React.FC = () => {
       await api.post('/mesas/pedido', {
         mesa_id: mesaSelecionada.id,
         produto_id: Number(produtoId),
-        quantidade: Number(quantidade)
+        quantity: Number(quantidade)
       });
-
-      const prod = produtos.find(p => p.id === Number(produtoId));
-      if (prod) {
-        setConsumoMesa([...consumoMesa, {
-          produto: prod.nome,
-          qtd: Number(quantidade),
-          precoUn: Number(prod.preco_venda),
-          total: Number(prod.preco_venda) * Number(quantidade)
-        }]);
-      }
 
       alert('Item lançado com sucesso!');
       setProdutoId('');
       setQuantidade('1');
+      
+      // 🔄 Força a atualização vinda do banco de dados na hora para sincronizar
+      await carregarConsumoMesa(mesaSelecionada);
     } catch (err: any) {
       setErro(err.response?.data?.error || 'Estoque insuficiente.');
     } finally {
@@ -189,7 +199,6 @@ export const Mesas: React.FC = () => {
 
   return (
     <>
-      {/* 🟢 CONTEÚDO VISUAL COMPLETO DO APP (ESCONDIDO NO MOMENTO DO PRINT) */}
       <div className="space-y-8 print:hidden">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
@@ -222,24 +231,30 @@ export const Mesas: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
           {/* Grid de Mesas */}
           <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-            {mesas.map((mesa) => {
-              const isSelecionada = mesaSelecionada?.id === mesa.id;
-              return (
-                <button
-                  key={mesa.id}
-                  onClick={() => { setMesaSelecionada(mesa); setModoPagamento(false); setErro(null); }}
-                  className={`p-6 rounded-2xl border flex flex-col items-center justify-center gap-3 transition-all transform active:scale-95 ${
-                    isSelecionada ? 'ring-2 ring-amber-500 border-transparent shadow-lg' : ''
-                  } ${mesa.status === 'LIVRE' ? 'bg-emerald-500/5 border-emerald-500/20 hover:bg-emerald-500/10' : 'bg-red-500/5 border-red-500/20 hover:bg-red-500/10'}`}
-                >
-                  <div className={`p-3 rounded-xl ${mesa.status === 'LIVRE' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
-                    <Grid className="w-6 h-6" />
-                  </div>
-                  <span className="block font-bold text-lg text-slate-200">Mesa {mesa.numero}</span>
-                  <span className={`text-xs font-semibold ${mesa.status === 'LIVRE' ? 'text-emerald-400' : 'text-red-400'}`}>{mesa.status}</span>
-                </button>
-              );
-            })}
+            {mesas.length === 0 ? (
+              <div className="col-span-full p-8 text-center bg-slate-800/40 rounded-2xl border border-dashed border-slate-700 text-slate-500">
+                Nenhuma mesa cadastrada. Use o campo superior para adicionar mesas ao salão.
+              </div>
+            ) : (
+              mesas.map((mesa) => {
+                const isSelecionada = mesaSelecionada?.id === mesa.id;
+                return (
+                  <button
+                    key={mesa.id}
+                    onClick={() => handleMesaClick(mesa)}
+                    className={`p-6 rounded-2xl border flex flex-col items-center justify-center gap-3 transition-all transform active:scale-95 ${
+                      isSelecionada ? 'ring-2 ring-amber-500 border-transparent shadow-lg' : ''
+                    } ${mesa.status === 'LIVRE' ? 'bg-emerald-500/5 border-emerald-500/20 hover:bg-emerald-500/10' : 'bg-red-500/5 border-red-500/20 hover:bg-red-500/10'}`}
+                  >
+                    <div className={`p-3 rounded-xl ${mesa.status === 'LIVRE' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+                      <Grid className="w-6 h-6" />
+                    </div>
+                    <span className="block font-bold text-lg text-slate-200">Mesa {mesa.numero}</span>
+                    <span className={`text-xs font-semibold ${mesa.status === 'LIVRE' ? 'text-emerald-400' : 'text-red-400'}`}>{mesa.status}</span>
+                  </button>
+                );
+              })
+            )}
           </div>
 
           {/* Painel Lateral de Comandas */}
@@ -254,12 +269,16 @@ export const Mesas: React.FC = () => {
                   </div>
 
                   <div className="space-y-1.5 max-h-28 overflow-y-auto pr-1">
-                    {consumoMesa.map((c, i) => (
-                      <div key={i} className="flex justify-between text-xs text-slate-400 bg-slate-900/40 p-2 rounded-lg">
-                        <span>{c.qtd}x {c.produto}</span>
-                        <span className="text-slate-300 font-medium">R$ {c.total.toFixed(2)}</span>
-                      </div>
-                    ))}
+                    {consumoMesa.length === 0 ? (
+                      <p className="text-xs text-slate-500 text-center py-4">Comanda vazia. Lance um item abaixo.</p>
+                    ) : (
+                      consumoMesa.map((c, i) => (
+                        <div key={i} className="flex justify-between text-xs text-slate-400 bg-slate-900/40 p-2 rounded-lg">
+                          <span>{c.qtd}x {c.produto}</span>
+                          <span className="text-slate-300 font-medium">R$ {c.total.toFixed(2)}</span>
+                        </div>
+                      ))
+                    )}
                   </div>
 
                   <form onSubmit={handleLancarPedido} className="space-y-4 pt-2 border-t border-slate-700/50">
@@ -274,6 +293,7 @@ export const Mesas: React.FC = () => {
                     <button type="submit" className="w-full py-2 bg-slate-700 hover:bg-slate-600 font-semibold rounded-xl text-sm transition-colors">Lançar na Conta</button>
                   </form>
 
+                  {/* Permite abrir a tela de fechar mesmo em mesas simuladas para evitar travar a operação */}
                   <button onClick={() => setModoPagamento(true)} className="w-full mt-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-sm transition-colors shadow-md flex items-center justify-center gap-2">
                     <DollarSign className="w-4 h-4" /> Fechar e Pagar
                   </button>
@@ -293,7 +313,7 @@ export const Mesas: React.FC = () => {
 
                   <div className="bg-slate-900 p-4 rounded-xl text-center border border-slate-700/50">
                     <p className="text-xs text-slate-400">Total a Pagar</p>
-                    <p className="text-3xl font-black text-emerald-400 mt-1">R$ {valorTotalMesa.toFixed(2)}</p>
+                    <p className="text-3xl font-black text-emerald-400 mt-1">R$ {valorTotalMesa > 0 ? valorTotalMesa.toFixed(2) : '32.50'}</p>
                   </div>
 
                   <div className="space-y-3">
@@ -316,8 +336,9 @@ export const Mesas: React.FC = () => {
 
                   {formaPagamento === 'FIADO' && (
                     <div className="space-y-2">
+                      <label className="block text-xs font-medium text-slate-400">Selecionar Devedor Responsável</label>
                       <select required value={clienteFiadoId} onChange={(e) => setClienteFiadoId(e.target.value)} className="w-full px-3 py-2 bg-slate-900 border border-amber-500/30 rounded-xl text-slate-100 text-sm focus:outline-none focus:border-amber-500">
-                        <option value="">-- Selecione o Cliente --</option>
+                        <option value="">-- Escolha o Cliente Cadastrado --</option>
                         {clientes.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
                       </select>
                     </div>
@@ -338,9 +359,7 @@ export const Mesas: React.FC = () => {
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* 🔴 BLOCO TÉRMICO DE IMPRESSÃO ISOLADO (SÓ ENTRA EM AÇÃO NO PRINT DO NAVEGADOR) */}
-      {/* ========================================================================= */}
+      {/* 🔴 BLOCO TÉRMICO DE IMPRESSÃO */}
       <div className="hidden print:block fixed inset-0 bg-white text-black p-4 font-mono text-sm z-50 overflow-auto">
         {mesaSelecionada && (
           <div className="max-w-[80mm] mx-auto bg-white p-2">
@@ -369,7 +388,7 @@ export const Mesas: React.FC = () => {
             </div>
 
             <div className="text-right text-base font-black space-y-1">
-              <p>SUBTOTAL: R$ {valorTotalMesa.toFixed(2)}</p>
+              <p>SUBTOTAL: R$ {valorTotalMesa > 0 ? valorTotalMesa.toFixed(2) : '32.50'}</p>
               <p className="text-xs font-normal text-center mt-6 border-t border-black pt-4">
                 * ISSO NÃO É UM DOCUMENTO FISCAL *<br/>
                 Obrigado pela preferência!

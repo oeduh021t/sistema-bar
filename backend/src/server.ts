@@ -1,10 +1,12 @@
-import express, { Response, NextFunction } from 'express';
+import express from 'express';
+import type { Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { verificarToken, concederAcesso, CustomRequest } from './middlewares/auth';
+import { verificarToken, concederAcesso } from './middlewares/auth';
+import type { CustomRequest } from './middlewares/auth';
 import { tratadorDeErrosGlobal } from './middlewares/erro';
 import cors from 'cors';
 
@@ -31,6 +33,12 @@ const produtoSchema = z.object({
   preco_venda: z.union([z.string(), z.number()]).transform((val) => String(val)),
   quantidade_estoque: z.number().int().nonnegative({ message: 'A quantidade em estoque não pode ser negativa.' }),
   codigo_barras: z.string().optional()
+});
+
+const fechamentoSchema = z.object({
+  mesa_id: z.union([z.string(), z.number()]).transform((val) => Number(val)),
+  forma_pagamento: z.enum(['DINHEIRO', 'PIX', 'CARTAO', 'FIADO']),
+  cliente_fiado_id: z.union([z.string(), z.number()]).optional().transform((val) => val ? Number(val) : undefined)
 });
 
 const capturarErro = (fn: Function) => (req: CustomRequest, res: Response, next: NextFunction) => {
@@ -103,7 +111,7 @@ app.post('/auth/login', capturarErro(async (req: CustomRequest, res: Response) =
 
 app.get('/produtos', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
   const bar_id = req.usuarioLogado?.bar_id;
-  const produtos = await prisma.produtos.findMany({ where: { bar_id }, orderBy: { nome: 'asc' } });
+  const produtos = await prisma.produtos.findMany({ where: { bar_id: Number(bar_id) }, orderBy: { nome: 'asc' } });
   return res.json(produtos);
 }));
 
@@ -117,7 +125,7 @@ app.post('/produtos', verificarToken, concederAcesso(['DONO']), capturarErro(asy
       nome: dadosValidados.nome,
       preco_venda: dadosValidados.preco_venda,
       quantidade_estoque: dadosValidados.quantidade_estoque,
-      codigo_barras: dadosValidados.codigo_barras
+      codigo_barras: dadosValidados.codigo_barras || null // Correção para exactOptionalPropertyTypes
     }
   });
   return res.status(201).json(novoProduto);
@@ -129,7 +137,7 @@ app.post('/produtos', verificarToken, concederAcesso(['DONO']), capturarErro(asy
 
 app.get('/clientes-fiado', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
   const bar_id = req.usuarioLogado?.bar_id;
-  const clientes = await prisma.clientes_fiado.findMany({ where: { bar_id }, orderBy: { nome: 'asc' } });
+  const clientes = await prisma.clientes_fiado.findMany({ where: { bar_id: Number(bar_id) }, orderBy: { nome: 'asc' } });
   return res.json(clientes);
 }));
 
@@ -161,7 +169,7 @@ app.post('/fiado/movimentacao', verificarToken, capturarErro(async (req: CustomR
   const valorNum = Number(valor);
   const cliente = await prisma.clientes_fiado.findUnique({ where: { id: Number(cliente_id) } });
 
-  if (!cliente || cliente.bar_id !== bar_id) {
+  if (!cliente || cliente.bar_id !== Number(bar_id)) {
     return res.status(404).json({ error: 'Cliente não cadastrado ou não pertence a este bar.' });
   }
 
@@ -198,7 +206,7 @@ app.post('/fiado/movimentacao', verificarToken, capturarErro(async (req: CustomR
 app.get('/mesas', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
   const bar_id = req.usuarioLogado?.bar_id;
   const listaMesas = await prisma.mesas.findMany({
-    where: { bar_id },
+    where: { bar_id: Number(bar_id) },
     orderBy: { numero: 'asc' }
   });
   return res.json(listaMesas);
@@ -221,7 +229,7 @@ app.post('/mesas/status', verificarToken, capturarErro(async (req: CustomRequest
   const { mesa_id, status } = req.body;
 
   const mesa = await prisma.mesas.findUnique({ where: { id: Number(mesa_id) } });
-  if (!mesa || mesa.bar_id !== bar_id) {
+  if (!mesa || mesa.bar_id !== Number(bar_id)) {
     return res.status(404).json({ error: 'Mesa não encontrada neste bar.' });
   }
 
@@ -233,18 +241,43 @@ app.post('/mesas/status', verificarToken, capturarErro(async (req: CustomRequest
   return res.json({ message: `Mesa agora está ${status}`, mesa: mesaAtualizada });
 }));
 
+app.get('/mesas/:id/pedidos', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
+  const bar_id = req.usuarioLogado?.bar_id;
+  const mesa_id = Number(req.params.id);
+
+  // 🔄 Ajustado include para "produtos" para casar perfeitamente com a relação do banco
+  const pedidos = await prisma.pedidos_mesa.findMany({
+    where: { mesa_id, bar_id: Number(bar_id) },
+    include: { produtos: true }
+  });
+
+  const consumoFormatado = pedidos.map((item: any) => {
+    const produtoRelacionado = item.produtos;
+    const precoUn = produtoRelacionado ? Number(produtoRelacionado.preco_venda) : 0;
+    const qtdFinal = Number(item.quantidade || item.quantity || 1);
+    return {
+      produto: produtoRelacionado ? produtoRelacionado.nome : 'Produto Removido',
+      qtd: qtdFinal,
+      precoUn: precoUn,
+      total: precoUn * qtdFinal
+    };
+  });
+
+  return res.json(consumoFormatado);
+}));
+
 app.post('/mesas/pedido', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
   const bar_id = req.usuarioLogado?.bar_id;
   const { mesa_id, produto_id, quantity } = req.body;
   const qtdLancada = Number(quantity || 1);
 
   const mesa = await prisma.mesas.findUnique({ where: { id: Number(mesa_id) } });
-  if (!mesa || mesa.bar_id !== bar_id) {
+  if (!mesa || mesa.bar_id !== Number(bar_id)) {
     return res.status(404).json({ error: 'Mesa não encontrada neste bar.' });
   }
 
   const produto = await prisma.produtos.findUnique({ where: { id: Number(produto_id) } });
-  if (!produto || produto.bar_id !== bar_id) {
+  if (!produto || produto.bar_id !== Number(bar_id)) {
     return res.status(404).json({ error: 'Produto não encontrado neste bar.' });
   }
 
@@ -254,7 +287,13 @@ app.post('/mesas/pedido', verificarToken, capturarErro(async (req: CustomRequest
 
   const [novoPedido] = await prisma.$transaction([
     prisma.pedidos_mesa.create({
-      data: { bar_id: Number(bar_id), mesa_id: Number(mesa_id), produto_id: Number(produto_id), quantidade: qtdLancada }
+      data: { 
+        bar_id: Number(bar_id), 
+        mesa_id: Number(mesa_id), 
+        produto_id: Number(produto_id), 
+        quantity: qtdLancada, 
+        quantidade: qtdLancada 
+      }
     }),
     prisma.produtos.update({
       where: { id: Number(produto_id) },
@@ -266,62 +305,71 @@ app.post('/mesas/pedido', verificarToken, capturarErro(async (req: CustomRequest
 }));
 
 app.post('/mesas/fechamento', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
-  const { mesa_id, forma_pagamento, cliente_fiado_id } = req.body;
-  const bar_id = req.usuarioLogado?.bar_id;
+  const { mesa_id, forma_pagamento, cliente_fiado_id } = fechamentoSchema.parse(req.body);
+  const bar_id = Number(req.usuarioLogado?.bar_id);
 
-  if (!mesa_id) {
-    return res.status(400).json({ error: 'ID da mesa é obrigatório.' });
+  const mesaExiste = await prisma.mesas.findUnique({ where: { id: mesa_id } });
+  if (!mesaExiste || mesaExiste.bar_id !== bar_id) {
+    return res.status(404).json({ error: 'Mesa não cadastrada ou pertencente a outro estabelecimento.' });
   }
 
-  const mesaExiste = await prisma.mesas.findUnique({ where: { id: Number(mesa_id) } });
+  // 🔄 Ajustado include para "produtos" aqui também
+  const pedidos = await prisma.pedidos_mesa.findMany({
+    where: { mesa_id, bar_id },
+    include: { produtos: true }
+  });
 
-  if (!mesaExiste) {
-    return res.json({ 
-      message: `Encerramento simulado com sucesso (Mesa ID ${mesa_id} não persistida no Postgres).`,
-      sucesso: true 
-    });
+  if (pedidos.length === 0) {
+    return res.status(400).json({ error: 'A mesa não possui pedidos ativos para encerramento.' });
   }
 
-  const pedidos = await prisma.pedidos_mesa.findMany({ where: { mesa_id: Number(mesa_id), bar_id } });
+  const totalConsumo = pedidos.reduce((acc: number, item: any) => {
+    const preco = item.produtos ? Number(item.produtos.preco_venda) : 0;
+    const qtd = Number(item.quantidade || item.quantity || 1);
+    return acc + (preco * qtd);
+  }, 0);
 
   if (forma_pagamento === 'FIADO') {
-    if (!clienteFiadoId) {
-      return res.status(400).json({ error: 'Para fechar como pendência, selecione um cliente cadastrado.' });
+    if (!cliente_fiado_id) {
+      return res.status(400).json({ error: 'Para fechar como pendência, selecione um devedor cadastrado.' });
     }
 
-    const cliente = await prisma.clientes_fiado.findUnique({ where: { id: Number(clienteFiadoId) } });
+    const cliente = await prisma.clientes_fiado.findUnique({ where: { id: cliente_fiado_id } });
 
     if (!cliente || cliente.bar_id !== bar_id) {
-      return res.status(404).json({ error: 'Cliente não encontrado.' });
+      return res.status(404).json({ error: 'Devedor não encontrado no sistema ou pertencente a outro estabelecimento.' });
     }
 
-    const produtos = await prisma.produtos.findMany({ where: { bar_id } });
-    const totalConsumo = pedidos.reduce((acc: number, item: any) => {
-      const prod = produtos.find(p => p.id === item.produto_id);
-      return acc + (prod ? Number(prod.preco_venda) * item.quantidade : 0);
-    }, 0);
-
     if (Number(cliente.saldo_devedor) + totalConsumo > Number(cliente.limite_credito)) {
-      return res.status(400).json({ error: 'Bloqueado: O valor desta comanda excede o limite de crédito disponível.' });
+      return res.status(400).json({ error: 'Bloqueado: O valor desta comanda excede o limite de crédito disponível para o devedor.' });
     }
 
     await prisma.$transaction([
       prisma.historico_fiado.create({
-        data: { bar_id, cliente_id: Number(clienteFiadoId), tipo: 'DEBITO', valor: totalConsumo, descricao: `Consumo na Mesa ${mesaExiste.numero}` }
+        data: { 
+          bar_id, 
+          cliente_id: cliente_fiado_id, 
+          tipo: 'DEBITO', 
+          valor: totalConsumo, 
+          descricao: `Consumo na Mesa ${mesaExiste.numero}` 
+        }
       }),
       prisma.clientes_fiado.update({
-        where: { id: Number(clienteFiadoId) },
+        where: { id: cliente_fiado_id },
         data: { saldo_devedor: { increment: totalConsumo } }
-      })
+      }),
+      prisma.pedidos_mesa.deleteMany({ where: { mesa_id } }),
+      prisma.mesas.update({ where: { id: mesa_id }, data: { status: 'LIVRE' } })
+    ]);
+
+  } else {
+    await prisma.$transaction([
+      prisma.pedidos_mesa.deleteMany({ where: { mesa_id } }),
+      prisma.mesas.update({ where: { id: mesa_id }, data: { status: 'LIVRE' } })
     ]);
   }
 
-  await prisma.$transaction([
-    prisma.pedidos_mesa.deleteMany({ where: { mesa_id: Number(mesa_id) } }),
-    prisma.mesas.update({ where: { id: Number(mesa_id) }, data: { status: 'LIVRE' } })
-  ]);
-
-  return res.json({ message: 'Mesa finalizada e conta encerrada com sucesso!' });
+  return res.json({ message: 'Mesa finalizada e conta encerrada com sucesso!', total: totalConsumo });
 }));
 
 // ==========================================
@@ -331,27 +379,28 @@ app.get('/relatorios/dashboard', verificarToken, concederAcesso(['DONO']), captu
   const bar_id = req.usuarioLogado?.bar_id;
 
   const topDevedores = await prisma.clientes_fiado.findMany({
-    where: { bar_id, saldo_devedor: { gt: 0 } },
+    where: { bar_id: Number(bar_id), saldo_devedor: { gt: 0 } },
     orderBy: { saldo_devedor: 'desc' },
     take: 5,
     select: { nome: true, saldo_devedor: true, limite_credito: true }
   });
 
   const movimentacoesFiado = await prisma.historico_fiado.findMany({
-    where: { bar_id },
+    where: { bar_id: Number(bar_id) },
     select: { tipo: true, valor: true }
   });
 
   const totalPenduradoNoFiado = movimentacoesFiado.filter((m: any) => m.tipo === 'DEBITO').reduce((acc: number, m: any) => acc + Number(m.valor), 0);
   const totalPagoNoFiado = movimentacoesFiado.filter((m: any) => m.tipo === 'CREDITO').reduce((acc: number, m: any) => acc + Number(m.valor), 0);
   
-  const pedidosEmMesas = await prisma.pedidos_mesa.findMany({ where: { bar_id } });
-  const produtosDoBar = await prisma.produtos.findMany({ where: { bar_id } });
+  const pedidosEmMesas = await prisma.pedidos_mesa.findMany({ where: { bar_id: Number(bar_id) } });
+  const produtosDoBar = await prisma.produtos.findMany({ where: { bar_id: Number(bar_id) } });
 
   const totalEmMesasAbertas = pedidosEmMesas.reduce((acc: number, pedido: any) => {
     const produto = produtosDoBar.find(p => p.id === pedido.produto_id);
     const preco = produto ? Number(produto.preco_venda) : 0;
-    return acc + (preco * pedido.quantidade);
+    const qtd = Number(pedido.quantidade || pedido.quantity || 1);
+    return acc + (preco * qtd);
   }, 0);
 
   return res.json({
