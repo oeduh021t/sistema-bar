@@ -1,6 +1,7 @@
-import { PrismaClient } from '@prisma/client';
-import bcrypt from 'bcrypt';
-import dotenv from 'dotenv';
+// 🟢 Alterado para a sintaxe antiga de CommonJS para satisfazer o compilador neste arquivo isolado
+const { PrismaClient } = require('@prisma/client');
+const bcrypt = require('bcrypt');
+const dotenv = require('dotenv');
 
 // Carrega as variáveis do arquivo .env
 dotenv.config();
@@ -8,7 +9,6 @@ dotenv.config();
 const prisma = new PrismaClient();
 
 async function main() {
-  // Busca do .env ou usa o valor padrão caso você esqueça de preencher
   const email = process.env.ADMIN_EMAIL || "admin@admin.com";
   const senhaPura = process.env.ADMIN_PASSWORD;
 

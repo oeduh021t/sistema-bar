@@ -441,6 +441,55 @@ app.post('/produtos', verificarToken, concederAcesso(['DONO']), capturarErro(asy
   return res.status(201).json(novoProduto);
 }));
 
+// 🟢 1. NOVA ROTA: DELETAR UM PRODUTO DO BANCO (DONO APENAS)
+app.delete('/produtos/:id', verificarToken, concederAcesso(['DONO']), capturarErro(async (req: CustomRequest, res: Response) => {
+  const produtoId = Number(req.params.id);
+  const bar_id = Number(req.usuarioLogado?.bar_id);
+
+  // Segurança: Garante que o dono só pode deletar um produto do próprio bar dele
+  const produto = await prisma.produtos.findUnique({ where: { id: produtoId } });
+  
+  if (!produto || produto.bar_id !== bar_id) {
+    return res.status(404).json({ error: 'Produto não encontrado neste estabelecimento.' });
+  }
+
+  // Deleta fisicamente o produto do banco
+  await prisma.produtos.delete({
+    where: { id: produtoId }
+  });
+
+  return res.json({ message: 'Produto removido com sucesso do estoque!' });
+}));
+
+// 🟢 2. NOVA ROTA: PATCH PARA ATUALIZAR SÓ O ESTOQUE (BALANÇO / INVENTÁRIO)
+app.patch('/produtos/:id/estoque', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
+  const produtoId = Number(req.params.id);
+  const bar_id = Number(req.usuarioLogado?.bar_id);
+  
+  // Valida que o corpo da requisição traz a quantidade correta em formato numérico inteiro
+  const { quantidade_estoque } = z.object({
+    quantidade_estoque: z.number().int().nonnegative()
+  }).parse(req.body);
+
+  // Segurança: Garante que o funcionário/dono está mexendo no produto do bar dele
+  const produto = await prisma.produtos.findUnique({ where: { id: produtoId } });
+  
+  if (!produto || produto.bar_id !== bar_id) {
+    return res.status(404).json({ error: 'Produto não localizado neste estabelecimento.' });
+  }
+
+  // Atualiza apenas a coluna de estoque no Postgres
+  const produtoAtualizado = await prisma.produtos.update({
+    where: { id: produtoId },
+    data: { quantidade_estoque }
+  });
+
+  return res.json({ 
+    message: 'Balanço de estoque sincronizado com sucesso!', 
+    quantidade_atual: produtoAtualizado.quantidade_estoque 
+  });
+}));
+
 // ==========================================
 // MÓDULO DE PENDÊNCIAS / CRÉDITO (PROTEGIDO)
 // ==========================================
