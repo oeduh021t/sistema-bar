@@ -21,6 +21,13 @@ app.use(express.json());
 const JWT_SECRET = process.env.JWT_SECRET || 'chave_reserva_segura';
 
 // ==========================================
+// FUNÇÕES UTILITÁRIAS (No topo para evitar problemas de hoisting)
+// ==========================================
+const capturarErro = (fn: Function) => (req: CustomRequest, res: Response, next: NextFunction) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
+
+// ==========================================
 // SCHEMAS DE VALIDAÇÃO (ZOD)
 // ==========================================
 const loginSchema = z.object({
@@ -41,9 +48,75 @@ const fechamentoSchema = z.object({
   cliente_fiado_id: z.union([z.string(), z.number()]).optional().transform((val) => val ? Number(val) : undefined)
 });
 
-const capturarErro = (fn: Function) => (req: CustomRequest, res: Response, next: NextFunction) => {
-  Promise.resolve(fn(req, res, next)).catch(next);
-};
+// SCHEMAS DE VALIDAÇÃO DO CAIXA
+const caixaAberturaSchema = z.object({
+  valor_abertura: z.union([z.string(), z.number()]).transform((val) => Number(val))
+});
+
+const caixaFechamentoSchema = z.object({
+  valor_fechamento: z.union([z.string(), z.number()]).transform((val) => Number(val))
+});
+
+// ==========================================
+// MÓDULO DE CONTROLE DE CAIXA (PROTEGIDO)
+// ==========================================
+
+// 1. VERIFICAR STATUS DO CAIXA ATUAL
+app.get('/caixa/status', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
+  const bar_id = Number(req.usuarioLogado?.bar_id);
+
+  const caixaAberto = await prisma.caixas.findFirst({
+    where: { bar_id, status: 'ABERTO' }
+  });
+
+  return res.json(caixaAberto ? { aberto: true, caixa: caixaAberto } : { aberto: false });
+}));
+
+// 2. ABRIR O CAIXA DO DIA
+app.post('/caixa/abrir', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
+  const bar_id = Number(req.usuarioLogado?.bar_id);
+  const usuario_id = Number(req.usuarioLogado?.id);
+  const { valor_abertura } = caixaAberturaSchema.parse(req.body);
+
+  const caixaExistente = await prisma.caixas.findFirst({
+    where: { bar_id, status: 'ABERTO' }
+  });
+
+  if (caixaExistente) {
+    return res.status(400).json({ error: 'Já existe um caixa aberto para este establishment.' });
+  }
+
+  const novoCaixa = await prisma.caixas.create({
+    data: { bar_id, usuario_id, valor_abertura, status: 'ABERTO' }
+  });
+
+  return res.status(201).json({ message: 'Caixa aberto com sucesso!', caixa: novoCaixa });
+}));
+
+// 3. FECHAR O CAIXA DO DIA
+app.post('/caixa/fechar', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
+  const bar_id = Number(req.usuarioLogado?.bar_id);
+  const { valor_fechamento } = caixaFechamentoSchema.parse(req.body);
+
+  const caixaAberto = await prisma.caixas.findFirst({
+    where: { bar_id, status: 'ABERTO' }
+  });
+
+  if (!caixaAberto) {
+    return res.status(400).json({ error: 'Não há nenhum caixa aberto para realizar o fechamento.' });
+  }
+
+  const caixaAtualizado = await prisma.caixas.update({
+    where: { id: caixaAberto.id },
+    data: {
+      status: 'FECHADO',
+      valor_fechamento,
+      data_fechamento: new Date()
+    }
+  });
+
+  return res.json({ message: 'Caixa encerrado com sucesso!', caixa: caixaAtualizado });
+}));
 
 // ==========================================
 // MÓDULO DE AUTENTICAÇÃO (ROTAS PÚBLICAS)
@@ -125,7 +198,7 @@ app.post('/produtos', verificarToken, concederAcesso(['DONO']), capturarErro(asy
       nome: dadosValidados.nome,
       preco_venda: dadosValidados.preco_venda,
       quantidade_estoque: dadosValidados.quantidade_estoque,
-      codigo_barras: dadosValidados.codigo_barras || null // Correção para exactOptionalPropertyTypes
+      codigo_barras: dadosValidados.codigo_barras || null
     }
   });
   return res.status(201).json(novoProduto);
@@ -245,7 +318,6 @@ app.get('/mesas/:id/pedidos', verificarToken, capturarErro(async (req: CustomReq
   const bar_id = req.usuarioLogado?.bar_id;
   const mesa_id = Number(req.params.id);
 
-  // 🔄 Ajustado include para "produtos" para casar perfeitamente com a relação do banco
   const pedidos = await prisma.pedidos_mesa.findMany({
     where: { mesa_id, bar_id: Number(bar_id) },
     include: { produtos: true }
@@ -313,7 +385,6 @@ app.post('/mesas/fechamento', verificarToken, capturarErro(async (req: CustomReq
     return res.status(404).json({ error: 'Mesa não cadastrada ou pertencente a outro estabelecimento.' });
   }
 
-  // 🔄 Ajustado include para "produtos" aqui também
   const pedidos = await prisma.pedidos_mesa.findMany({
     where: { mesa_id, bar_id },
     include: { produtos: true }

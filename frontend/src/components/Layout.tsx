@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
-import { LayoutDashboard, Package, Users, LogOut, Beer, Grid } from 'lucide-react';
+import { LayoutDashboard, Package, Users, LogOut, Beer, Grid, Banknote } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -13,6 +13,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, telaAtiva, setTelaAtiv
 
   const menus = [
     { id: 'dashboard', nome: 'Dashboard', icone: LayoutDashboard, acesso: ['DONO'] },
+    { id: 'caixa', nome: 'Controle de Caixa', icone: Banknote, acesso: ['DONO'] }, // 🟢 Adicionado o Módulo de Caixa
     { id: 'mesas', nome: 'Salão & Mesas', icone: Grid, acesso: ['DONO', 'GARCOM'] },
     { id: 'produtos', nome: 'Estoque / Produtos', icone: Package, acesso: ['DONO', 'GARCOM'] },
     { id: 'fiado', nome: 'Controle de Pendências', icone: Users, acesso: ['DONO'] },

@@ -5,7 +5,8 @@ import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
 import { Produtos } from './pages/Produtos';
 import { Fiado } from './pages/Fiado';
-import { Mesas } from './pages/Mesas'; // 👈 1. Importa as Mesas aqui
+import { Mesas } from './pages/Mesas'; 
+import Caixa from './pages/Caixa'; // 🔄 Ajustado o espaço e o import padrão
 
 const ConteudoApp: React.FC = () => {
   const { token, loading } = useAuth();
@@ -26,9 +27,10 @@ const ConteudoApp: React.FC = () => {
   return (
     <Layout telaAtiva={telaAtiva} setTelaAtiva={setTelaAtiva}>
       {telaAtiva === 'dashboard' && <Dashboard />}
-      {telaAtiva === 'mesas' && <Mesas />} {/* 👈 2. Renderiza o salão aqui */}
+      {telaAtiva === 'mesas' && <Mesas />}
       {telaAtiva === 'produtos' && <Produtos />}
       {telaAtiva === 'fiado' && <Fiado />}
+      {telaAtiva === 'caixa' && <Caixa />} {/* 🟢 Injetado para renderizar o painel do caixa */}
     </Layout>
   );
 };
