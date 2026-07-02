@@ -3,6 +3,9 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { Login } from './pages/Login';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
+import { Produtos } from './pages/Produtos';
+import { Fiado } from './pages/Fiado';
+import { Mesas } from './pages/Mesas'; // 👈 1. Importa as Mesas aqui
 
 const ConteudoApp: React.FC = () => {
   const { token, loading } = useAuth();
@@ -16,20 +19,16 @@ const ConteudoApp: React.FC = () => {
     );
   }
 
-  // Se não estiver logado, exibe apenas a tela de Login limpa
   if (!token) {
     return <Login />;
   }
 
-  // Se estiver logado, exibe a estrutura interna com a Sidebar
   return (
     <Layout telaAtiva={telaAtiva} setTelaAtiva={setTelaAtiva}>
       {telaAtiva === 'dashboard' && <Dashboard />}
-      {telaAtiva === 'produtos' && (
-        <div className="text-slate-400 font-medium">
-          🚧 Tela de Estoque e Produtos sendo preparada...
-        </div>
-      )}
+      {telaAtiva === 'mesas' && <Mesas />} {/* 👈 2. Renderiza o salão aqui */}
+      {telaAtiva === 'produtos' && <Produtos />}
+      {telaAtiva === 'fiado' && <Fiado />}
     </Layout>
   );
 };

@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
-import { LayoutDashboard, Package, LogOut, Beer } from 'lucide-react';
+import { LayoutDashboard, Package, Users, LogOut, Beer, Grid } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -13,24 +13,22 @@ export const Layout: React.FC<LayoutProps> = ({ children, telaAtiva, setTelaAtiv
 
   const menus = [
     { id: 'dashboard', nome: 'Dashboard', icone: LayoutDashboard, acesso: ['DONO'] },
+    { id: 'mesas', nome: 'Salão & Mesas', icone: Grid, acesso: ['DONO', 'GARCOM'] },
     { id: 'produtos', nome: 'Estoque / Produtos', icone: Package, acesso: ['DONO', 'GARCOM'] },
+    { id: 'fiado', nome: 'Controle de Pendências', icone: Users, acesso: ['DONO'] },
   ];
 
   return (
     <div className="flex min-h-screen bg-slate-900 text-slate-100">
-      {/* Barra Lateral (Sidebar) */}
       <aside className="w-64 bg-slate-800 border-r border-slate-700 flex flex-col justify-between p-4">
         <div>
-          {/* Logo */}
           <div className="flex items-center gap-2 px-2 py-4 border-b border-slate-700 mb-6">
             <Beer className="w-8 h-8 text-amber-500" />
             <span className="text-xl font-bold tracking-tight text-amber-500">SaaS Bar</span>
           </div>
 
-          {/* Links do Menu */}
           <nav className="space-y-1">
             {menus.map((item) => {
-              // Se o usuário não tiver nível de acesso para o menu, esconde o botão
               if (!item.acesso.includes(usuario?.funcao || '')) return null;
               
               const Icone = item.icone;
@@ -54,7 +52,6 @@ export const Layout: React.FC<LayoutProps> = ({ children, telaAtiva, setTelaAtiv
           </nav>
         </div>
 
-        {/* Rodapé da Sidebar (Dados do Usuário + Sair) */}
         <div className="border-t border-slate-700 pt-4">
           <div className="px-2 mb-3">
             <p className="text-sm font-semibold truncate">{usuario?.nome}</p>
@@ -70,7 +67,6 @@ export const Layout: React.FC<LayoutProps> = ({ children, telaAtiva, setTelaAtiv
         </div>
       </aside>
 
-      {/* Área do Conteúdo Principal da Tela */}
       <main className="flex-1 p-8 overflow-y-auto">
         {children}
       </main>
