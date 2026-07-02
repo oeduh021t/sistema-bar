@@ -61,7 +61,7 @@ const caixaFechamentoSchema = z.object({
 // MÓDULO DE CONTROLE DE CAIXA (PROTEGIDO)
 // ==========================================
 
-// 1. VERIFICAR STATUS DO CAIXA ATUAL
+// 1. VERIFICAR STATUS E DADOS EM TEMPO REAL DO CAIXA
 app.get('/caixa/status', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
   const bar_id = Number(req.usuarioLogado?.bar_id);
 
@@ -69,7 +69,19 @@ app.get('/caixa/status', verificarToken, capturarErro(async (req: CustomRequest,
     where: { bar_id, status: 'ABERTO' }
   });
 
-  return res.json(caixaAberto ? { aberto: true, caixa: caixaAberto } : { aberto: false });
+  if (!caixaAberto) {
+    return res.json({ aberto: false });
+  }
+
+  const movimentacoes = await prisma.movimentacoes_caixa.findMany({
+    where: { caixa_id: caixaAberto.id }
+  });
+
+  return res.json({
+    aberto: true,
+    caixa: caixaAberto,
+    movimentacoes
+  });
 }));
 
 // 2. ABRIR O CAIXA DO DIA
@@ -83,17 +95,23 @@ app.post('/caixa/abrir', verificarToken, capturarErro(async (req: CustomRequest,
   });
 
   if (caixaExistente) {
-    return res.status(400).json({ error: 'Já existe um caixa aberto para este establishment.' });
+    return res.status(400).json({ error: 'Já existe um caixa aberto para este estabelecimento.' });
   }
 
   const novoCaixa = await prisma.caixas.create({
-    data: { bar_id, usuario_id, valor_abertura, status: 'ABERTO' }
+    data: { 
+      bar_id, 
+      usuario_id, 
+      valor_abertura, 
+      status: 'ABERTO',
+      total_dinheiro_sistema: valor_abertura
+    }
   });
 
   return res.status(201).json({ message: 'Caixa aberto com sucesso!', caixa: novoCaixa });
 }));
 
-// 3. FECHAR O CAIXA DO DIA
+// 3. FECHAR O CAIXA COMPENSANDO DIFERENÇAS (AUDITORIA)
 app.post('/caixa/fechar', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
   const bar_id = Number(req.usuarioLogado?.bar_id);
   const { valor_fechamento } = caixaFechamentoSchema.parse(req.body);
@@ -106,16 +124,60 @@ app.post('/caixa/fechar', verificarToken, capturarErro(async (req: CustomRequest
     return res.status(400).json({ error: 'Não há nenhum caixa aberto para realizar o fechamento.' });
   }
 
+  const totalSistemaEsperado = Number(caixaAberto.total_dinheiro_sistema);
+  const diferenca = valor_fechamento - totalSistemaEsperado;
+
   const caixaAtualizado = await prisma.caixas.update({
     where: { id: caixaAberto.id },
     data: {
       status: 'FECHADO',
-      valor_fechamento,
+      valor_fechamento_real: valor_fechamento,
+      diferenca_caixa: diferenca,
       data_fechamento: new Date()
     }
   });
 
-  return res.json({ message: 'Caixa encerrado com sucesso!', caixa: caixaAtualizado });
+  return res.json({ 
+    message: 'Caixa encerrado com sucesso!', 
+    caixa: caixaAtualizado,
+    auditoria: {
+      esperado_sistema: totalSistemaEsperado,
+      informado_operador: valor_fechamento,
+      resultado: diferenca === 0 ? 'Perfeito' : diferenca > 0 ? `Sobra de R$ ${diferenca}` : `Falta de R$ ${Math.abs(diferenca)}`
+    }
+  });
+}));
+
+// 4. ADICIONAR ENTRADA/SAÍDA MANUAL (SANGRIA OU SUPRIMENTO)
+app.post('/caixa/movimentacao', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
+  const bar_id = Number(req.usuarioLogado?.bar_id);
+  const { tipo, valor, meio_pagto, descricao } = req.body;
+
+  if (!tipo || !valor || !meio_pagto) {
+    return res.status(400).json({ error: 'Campos obrigatórios: tipo, valor e meio_pagto.' });
+  }
+
+  const caixaAberto = await prisma.caixas.findFirst({ where: { bar_id, status: 'ABERTO' } });
+  if (!caixaAberto) return res.status(400).json({ error: 'Não há caixa aberto para movimentar.' });
+
+  const valorNum = Number(valor);
+  let campoIncremento = 'total_dinheiro_sistema';
+  if (meio_pagto === 'PIX') campoIncremento = 'total_pix_sistema';
+  if (meio_pagto === 'CARTAO') campoIncremento = 'total_cartao_sistema';
+
+  const modificacaoValor = tipo === 'SANGRIA' ? -valorNum : valorNum;
+
+  await prisma.$transaction([
+    prisma.movimentacoes_caixa.create({
+      data: { bar_id, caixa_id: caixaAberto.id, tipo, meio_pagto, valor: valorNum, descricao }
+    }),
+    prisma.caixas.update({
+      where: { id: caixaAberto.id },
+      data: { [campoIncremento]: { increment: modificacaoValor } }
+    })
+  ]);
+
+  return res.json({ message: 'Movimentação avulsa registrada com sucesso!' });
 }));
 
 // ==========================================
@@ -270,6 +332,67 @@ app.post('/fiado/movimentacao', verificarToken, capturarErro(async (req: CustomR
     cliente: clienteAtualizado.nome,
     novo_saldo_devedor: clienteAtualizado.saldo_devedor
   });
+}));
+
+// 5. ABATER SALDO DEVEDOR (PAGAMENTO DE FIADO COM CAIXA INTEGRADO)
+app.post('/fiado/pagamento', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
+  const bar_id = Number(req.usuarioLogado?.bar_id);
+  const { cliente_id, valor, meio_pagto } = req.body;
+
+  if (!cliente_id || !valor || !meio_pagto) {
+    return res.status(400).json({ error: 'Campos obrigatórios: cliente_id, valor e meio_pagto.' });
+  }
+
+  const valorNum = Number(valor);
+  if (valorNum <= 0) {
+    return res.status(400).json({ error: 'O valor do pagamento deve ser maior que zero.' });
+  }
+
+  const cliente = await prisma.clientes_fiado.findUnique({ where: { id: Number(cliente_id) } });
+  if (!cliente || cliente.bar_id !== bar_id) {
+    return res.status(404).json({ error: 'Cliente não encontrado neste estabelecimento.' });
+  }
+
+  const caixaAberto = await prisma.caixas.findFirst({ where: { bar_id, status: 'ABERTO' } });
+  if (!caixaAberto) {
+    return res.status(400).json({ error: 'Bloqueado: Não é possível receber pagamentos sem um caixa aberto.' });
+  }
+
+  let campoIncremento = 'total_dinheiro_sistema';
+  if (meio_pagto === 'PIX') campoIncremento = 'total_pix_sistema';
+  if (meio_pagto === 'CARTAO') campoIncremento = 'total_cartao_sistema';
+
+  await prisma.$transaction([
+    prisma.clientes_fiado.update({
+      where: { id: Number(cliente_id) },
+      data: { saldo_devedor: { decrement: valorNum } }
+    }),
+    prisma.historico_fiado.create({
+      data: {
+        bar_id,
+        cliente_id: Number(cliente_id),
+        tipo: 'CREDITO',
+        valor: valorNum,
+        descricao: `Abatimento parcial/total via ${meio_pagto}`
+      }
+    }),
+    prisma.movimentacoes_caixa.create({
+      data: {
+        bar_id,
+        caixa_id: caixaAberto.id,
+        tipo: 'ENTRADA',
+        meio_pagto,
+        valor: valorNum,
+        descricao: `Recebimento de Fiado - Cliente: ${cliente.nome}`
+      }
+    }),
+    prisma.caixas.update({
+      where: { id: caixaAberto.id },
+      data: { [campoIncremento]: { increment: valorNum } }
+    })
+  ]);
+
+  return res.json({ message: 'Pagamento processado e injetado no caixa com sucesso!' });
 }));
 
 // ==========================================
@@ -434,13 +557,90 @@ app.post('/mesas/fechamento', verificarToken, capturarErro(async (req: CustomReq
     ]);
 
   } else {
-    await prisma.$transaction([
-      prisma.pedidos_mesa.deleteMany({ where: { mesa_id } }),
-      prisma.mesas.update({ where: { id: mesa_id }, data: { status: 'LIVRE' } })
-    ]);
+    const caixaAberto = await prisma.caixas.findFirst({ where: { bar_id, status: 'ABERTO' } });
+
+    if (caixaAberto) {
+      let campoAtualizar = 'total_dinheiro_sistema';
+      if (forma_pagamento === 'PIX') campoAtualizar = 'total_pix_sistema';
+      if (forma_pagamento === 'CARTAO') campoAtualizar = 'total_cartao_sistema';
+
+      await prisma.$transaction([
+        prisma.movimentacoes_caixa.create({
+          data: {
+            bar_id,
+            caixa_id: caixaAberto.id,
+            tipo: 'ENTRADA',
+            meio_pagto: forma_pagamento,
+            valor: totalConsumo,
+            descricao: `Encerramento da Mesa ${mesaExiste.numero}`
+          }
+        }),
+        prisma.caixas.update({
+          where: { id: caixaAberto.id },
+          data: { [campoAtualizar]: { increment: totalConsumo } }
+        }),
+        prisma.pedidos_mesa.deleteMany({ where: { mesa_id } }),
+        prisma.mesas.update({ where: { id: mesa_id }, data: { status: 'LIVRE' } })
+      ]);
+    } else {
+      await prisma.$transaction([
+        prisma.pedidos_mesa.deleteMany({ where: { mesa_id } }),
+        prisma.mesas.update({ where: { id: mesa_id }, data: { status: 'LIVRE' } })
+      ]);
+    }
   }
 
   return res.json({ message: 'Mesa finalizada e conta encerrada com sucesso!', total: totalConsumo });
+}));
+
+// ==========================================
+// MÓDULO DE GESTÃO DE USUÁRIOS (DONO APENAS)
+// ==========================================
+
+app.post('/usuarios/cadastro', verificarToken, capturarErro(async (req: CustomRequest, res: Response) => {
+  const bar_id = Number(req.usuarioLogado?.bar_id);
+  const funcaoCriador = req.usuarioLogado?.funcao;
+
+  if (funcaoCriador !== 'DONO') {
+    return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem cadastrar novos usuários.' });
+  }
+
+  const { nome, email, senha, funcao } = req.body;
+
+  if (!nome || !email || !senha || !funcao) {
+    return res.status(400).json({ error: 'Todos os campos (nome, email, senha, funcao) são obrigatórios.' });
+  }
+
+  const usuarioExistente = await prisma.usuarios.findUnique({
+    where: { email }
+  });
+
+  if (usuarioExistente) {
+    return res.status(400).json({ error: 'Este e-mail já está cadastrado no sistema.' });
+  }
+
+  const saltos = await bcrypt.genSalt(10);
+  const senhaCriptografada = await bcrypt.hash(senha, saltos);
+
+  const novoUsuario = await prisma.usuarios.create({
+    data: {
+      nome,
+      email,
+      senha: senhaCriptografada,
+      funcao: funcao.toUpperCase(),
+      bar_id
+    }
+  });
+
+  return res.status(201).json({
+    message: 'Funcionário cadastrado com sucesso!',
+    usuario: {
+      id: novoUsuario.id,
+      nome: novoUsuario.nome,
+      email: novoUsuario.email,
+      funcao: novoUsuario.funcao
+    }
+  });
 }));
 
 // ==========================================

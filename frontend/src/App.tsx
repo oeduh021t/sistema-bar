@@ -6,7 +6,8 @@ import { Dashboard } from './pages/Dashboard';
 import { Produtos } from './pages/Produtos';
 import { Fiado } from './pages/Fiado';
 import { Mesas } from './pages/Mesas'; 
-import Caixa from './pages/Caixa'; // 🔄 Ajustado o espaço e o import padrão
+import Caixa from './pages/Caixa'; 
+import { Usuarios } from './pages/Usuarios';
 
 const ConteudoApp: React.FC = () => {
   const { token, loading } = useAuth();
@@ -30,7 +31,8 @@ const ConteudoApp: React.FC = () => {
       {telaAtiva === 'mesas' && <Mesas />}
       {telaAtiva === 'produtos' && <Produtos />}
       {telaAtiva === 'fiado' && <Fiado />}
-      {telaAtiva === 'caixa' && <Caixa />} {/* 🟢 Injetado para renderizar o painel do caixa */}
+      {telaAtiva === 'caixa' && <Caixa />} 
+      {telaAtiva === 'usuarios' && <Usuarios />} {/* 🟢 Faltava injetar essa linha aqui! */}
     </Layout>
   );
 };
